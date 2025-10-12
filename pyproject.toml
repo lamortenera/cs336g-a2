@@ -36,7 +36,9 @@ python-preference = "managed"
 
 [tool.uv.sources]
 cs336-basics = { path = "./cs336-basics", editable = true }  # Change this path to your assignment1-basics repo you want to use your own implementation!
-
+torch = [
+  { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+]
 
 
 [tool.pytest.ini_options]
@@ -57,3 +59,7 @@ extend-select = ["UP"]
 ignore = [
     "F722"
 ]
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
