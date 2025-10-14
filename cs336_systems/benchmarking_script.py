@@ -14,10 +14,12 @@ from torch import Tensor
 from jaxtyping import Float, Bool, Int
 from cs336_basics.nn_utils import softmax
 
+
 def parse_bool(s):
     s = s.strip().lower()
     assert s in ["true", "false"]
     return s == "true"
+
 
 @nvtx.range("scaled dot product attention")
 def annotated_scaled_dot_product_attention(
@@ -46,17 +48,22 @@ def annotated_scaled_dot_product_attention(
 
     d_k = K.shape[-1]
     with nvtx.range("computing attention scores"):
-        attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
+        attention_scores = einsum(
+            Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
 
     if mask is not None:
         attention_scores = torch.where(mask, attention_scores, float("-inf"))
 
     with nvtx.range("computing softmax"):
-        attention_weights = softmax(attention_scores, dim=-1)  # Softmax over the key dimension
+        # Softmax over the key dimension
+        attention_weights = softmax(attention_scores, dim=-1)
 
     with nvtx.range("final matmul"):
-        result = einsum(attention_weights, V, "... query key, ... key d_v ->  ... query d_v")
+        result = einsum(
+            attention_weights, V,
+            "... query key, ... key d_v ->  ... query d_v")
     return result
+
 
 def inner_loop(model, inputs, labels, forward_only=False, optimizer=None):
     with nvtx.range("Forward pass"):
@@ -66,7 +73,7 @@ def inner_loop(model, inputs, labels, forward_only=False, optimizer=None):
     if not forward_only:
         with nvtx.range("Backward pass"):
             loss.backward()
-    
+
     if optimizer is not None:
         with nvtx.range("Optimizer step"):
             optimizer.step()
@@ -78,7 +85,7 @@ def inner_loop(model, inputs, labels, forward_only=False, optimizer=None):
 
 def benchmark(args):
     model_module.scaled_dot_product_attention = annotated_scaled_dot_product_attention
-    
+
     m = model_module.BasicsTransformerLM(
         vocab_size=args.vocab_size, num_layers=args.num_layers,
         d_model=args.d_model, num_heads=args.num_heads, d_ff=args.d_ff,
@@ -166,8 +173,9 @@ if __name__ == "__main__":
     repeated_args = ["context_length", "num_layers",
                      "num_heads", "d_model", "d_ff"]
     for arg in repeated_args:
-        assert len(getattr(
-            args, arg)) == num_configs, f"Expected: {num_configs}, found: {len(getattr(args, arg))}"
+        val_list = getattr(args, arg)
+        assert ((len(val_list) == num_configs) or (len(val_list) == 1)), f"Expected: {
+            num_configs}, found: {len(getattr(args, arg))}  "
 
     all_stats = []
     for i in range(num_configs):
@@ -175,8 +183,10 @@ if __name__ == "__main__":
         config_args.label = args.label[i]
         d = {"label": args.label[i]}
         for arg in repeated_args:
-            d[arg] = getattr(args, arg)[i]
-            setattr(config_args, arg, d[arg])
+            val_list = getattr(args, arg)
+            val = val_list[0] if len(val_list) == 1 else val_list[i]
+            d[arg] = val
+            setattr(config_args, arg, val)
         perf_stats = benchmark(config_args)
         d.update(perf_stats)
         all_stats.append(d)
