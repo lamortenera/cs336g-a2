@@ -65,10 +65,13 @@ def annotated_scaled_dot_product_attention(
     return result
 
 
-def inner_loop(model, inputs, labels, forward_only=False, optimizer=None):
-    with nvtx.range("Forward pass"):
-        outputs = model(inputs)
-        loss = nn_utils.cross_entropy(outputs, labels)
+def inner_loop(
+        model, inputs, labels, forward_only=False, optimizer=None,
+        autocast_dtype=None):
+    with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=(autocast_dtype is not None)):
+        with nvtx.range("Forward pass"):
+            outputs = model(inputs)
+            loss = nn_utils.cross_entropy(outputs, labels)
 
     if not forward_only:
         with nvtx.range("Backward pass"):
@@ -81,6 +84,13 @@ def inner_loop(model, inputs, labels, forward_only=False, optimizer=None):
 
     torch.cuda.synchronize()
     print(f"Loss: {loss.item():.3f}")
+
+
+def get_dtype(s: str) -> torch.dtype:
+    dtype = getattr(torch, s)
+    assert isinstance(dtype, torch.dtype)
+    assert dtype.is_floating_point
+    return dtype
 
 
 def benchmark(args):
@@ -102,18 +112,23 @@ def benchmark(args):
     inputs, labels = tokens[:, :-1], tokens[:, 1:]
 
     forward_only = parse_bool(args.forward_only)
+    autocast_dtype = None
+    if args.autocast_dtype is not None:
+        autocast_dtype = get_dtype(args.autocast_dtype)
 
     print("Warmup steps")
     with nvtx.range("Warmup steps"):
         for _ in range(args.warmup_steps):
-            inner_loop(m, inputs, labels, forward_only, optimizer)
+            inner_loop(m, inputs, labels, forward_only,
+                       optimizer, autocast_dtype)
 
     print("Benchmarking steps")
     with nvtx.range("Profiling steps"):
         timings = []
         for _ in range(args.benchmark_steps):
             t_start = timeit.default_timer()
-            inner_loop(m, inputs, labels, forward_only, optimizer)
+            inner_loop(m, inputs, labels, forward_only,
+                       optimizer, autocast_dtype)
             t_end = timeit.default_timer()
             timings.append(t_end - t_start)
 
@@ -143,6 +158,8 @@ if __name__ == "__main__":
         "--with_optimizer",
         help="Add an optimizer step",
         type=str, default="False")
+    parser.add_argument("--autocast_dtype", help="Use mixed precision",
+                        type=str)
     parser.add_argument("--output", help="Path to json output", type=str)
     parser.add_argument(
         "--vocab_size",
