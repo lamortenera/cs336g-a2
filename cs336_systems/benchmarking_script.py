@@ -187,7 +187,8 @@ if __name__ == "__main__":
             val = val_list[0] if len(val_list) == 1 else val_list[i]
             d[arg] = val
             setattr(config_args, arg, val)
-        perf_stats = benchmark(config_args)
+        with nvtx.range(config_args.label):
+            perf_stats = benchmark(config_args)
         d.update(perf_stats)
         all_stats.append(d)
     all_stats = pd.DataFrame(all_stats)
