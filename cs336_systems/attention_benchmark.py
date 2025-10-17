@@ -118,18 +118,15 @@ def benchmark(args):
     get_mem(device_index)
     m_0 = get_mem(device_index)
 
-    fun = inner_loop
-    if parse_bool(args.compile):
-        fun = torch.compile(fun)
 
     with nvtx.range("Warmup steps"):
         for _ in range(args.warmup_steps):
-            _ = fun(Q, K, V, device_index)
+            _ = inner_loop(Q, K, V, device_index)
 
     with nvtx.range("Forward benchmarking steps"):
         stats = []
         for _ in range(args.benchmark_steps):
-            stat = fun(Q, K, V, device_index)
+            stat = inner_loop(Q, K, V, device_index)
             stat["m_0"] = m_0
             stats.append(stat)
 
@@ -167,6 +164,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--d_model", help="Model embedding size", type=int, nargs="+")
     args = parser.parse_args()
+
+    if parse_bool(args.compile):
+        scaled_dot_product_attention = torch.compile(
+            scaled_dot_product_attention)
 
     if args.memory_output:
         torch.cuda.memory._record_memory_history(max_entries=1000000)
