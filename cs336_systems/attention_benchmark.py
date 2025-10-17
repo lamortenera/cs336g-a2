@@ -65,7 +65,7 @@ def get_mem(device_index):
     if device_index is None:
         return 0
     ret = torch.cuda.memory.max_memory_allocated(device_index)
-    torch.cuda.memory.reset_max_memory_allocated(device_index)
+    torch.cuda.reset_peak_memory_stats(device_index)
     return ret
 
 
