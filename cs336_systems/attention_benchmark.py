@@ -64,11 +64,14 @@ def scaled_dot_product_attention(
 def get_mem(device_index):
     if device_index is None:
         return 0
-    return torch.cuda.device_memory(device_index)
+    ret = torch.cuda.memory.max_memory_allocated(device_index)
+    torch.cuda.memory.reset_max_memory_allocated(device_index)
+    return ret
 
 
 def inner_loop(Q, K, V, device_index):
     t_start = timeit.default_timer()
+    get_mem(device_index)
     m_start = get_mem(device_index)
     with nvtx.range("Forward"):
         O = scaled_dot_product_attention(Q, K, V)
@@ -101,16 +104,19 @@ def to_series(df):
 
 def benchmark(args):
 
-    Q = torch.nn.Parameter(torch.randn(args.batch_size, args.context_length,
-                                       args.d_model)).to("cuda")
-    K = torch.nn.Parameter(torch.randn(args.batch_size, args.context_length,
-                                       args.d_model)).to("cuda")
-    V = torch.nn.Parameter(torch.randn(args.batch_size, args.context_length,
-                                       args.d_model)).to("cuda")
+    Q = torch.randn(args.batch_size, args.context_length,
+                    args.d_model).to("cuda").requires_grad_()
+    K = torch.randn(args.batch_size, args.context_length,
+                    args.d_model).to("cuda").requires_grad_()
+    V = torch.randn(args.batch_size, args.context_length,
+                    args.d_model).to("cuda").requires_grad_()
 
     device_index = None
     if parse_bool(args.memory_profile):
         device_index = torch.cuda.device("cuda").idx
+
+    get_mem(device_index)
+    m_0 = get_mem(device_index)
 
     with nvtx.range("Warmup steps"):
         for _ in range(args.warmup_steps):
@@ -120,6 +126,7 @@ def benchmark(args):
         stats = []
         for _ in range(args.benchmark_steps):
             stat = inner_loop(Q, K, V, device_index)
+            stat["m_0"] = m_0
             stats.append(stat)
 
     stats = pd.DataFrame(stats)
