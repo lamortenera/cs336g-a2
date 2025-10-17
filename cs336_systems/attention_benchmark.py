@@ -118,14 +118,18 @@ def benchmark(args):
     get_mem(device_index)
     m_0 = get_mem(device_index)
 
+    fun = inner_loop
+    if parse_bool(args.compile):
+        fun = torch.compile(fun)
+
     with nvtx.range("Warmup steps"):
         for _ in range(args.warmup_steps):
-            _ = inner_loop(Q, K, V, device_index)
+            _ = fun(Q, K, V, device_index)
 
     with nvtx.range("Forward benchmarking steps"):
         stats = []
         for _ in range(args.benchmark_steps):
-            stat = inner_loop(Q, K, V, device_index)
+            stat = fun(Q, K, V, device_index)
             stat["m_0"] = m_0
             stats.append(stat)
 
@@ -149,6 +153,9 @@ if __name__ == "__main__":
         type=int, default=100)
     parser.add_argument(
         "--memory_profile", help="If true, profile memory", type=str,
+        default="False")
+    parser.add_argument(
+        "--compile", help="If true, compile the computation", type=str,
         default="False")
     parser.add_argument(
         "--memory_output",
