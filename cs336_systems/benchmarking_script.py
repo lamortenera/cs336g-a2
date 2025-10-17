@@ -122,6 +122,9 @@ def benchmark(args):
             inner_loop(m, inputs, labels, forward_only,
                        optimizer, autocast_dtype)
 
+    memory_profiling = parse_bool(args.memory_profiling)
+    if memory_profiling:
+        torch.cuda.memory._record_memory_history(max_entries=1000000)
     print("Benchmarking steps")
     with nvtx.range("Profiling steps"):
         timings = []
@@ -133,6 +136,8 @@ def benchmark(args):
             timings.append(t_end - t_start)
 
         timings = pd.Series(timings)
+    torch.cuda.memory._dump_snapshot(args.output + "memory_snapshot.pickle")
+    torch.cuda.memory._record_memory_history(enabled=None)
     stats = timings.describe()
     print("Stats for: ", args.label)
     print(stats)
@@ -160,6 +165,8 @@ if __name__ == "__main__":
         type=str, default="False")
     parser.add_argument("--autocast_dtype", help="Use mixed precision",
                         type=str)
+    parser.add_argument("--memory_profiling", help="Enable memory profiling",
+                        type=str, default="False")
     parser.add_argument("--output", help="Path to json output", type=str)
     parser.add_argument(
         "--vocab_size",
