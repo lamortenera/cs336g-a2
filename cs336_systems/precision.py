@@ -65,9 +65,10 @@ class ToyModel(nn.Module):
         return fc2x
 
 if __name__ == "__main__":
-    m = ToyModel(2048, 2048).to("cuda")
-    inputs = torch.randn(30, 12, 2048).to("cuda")
-    labels = torch.randn(30, 12, 2048).to("cuda")
+    d_model = 4*2024
+    m = ToyModel(d_model, d_model).to("cuda")
+    inputs = torch.randn(30, 12, d_model).to("cuda")
+    labels = torch.randn(30, 12, d_model).to("cuda")
     for n, x in m.named_parameters():
         print("Outside context parameter", n, "dtype", x.dtype)
         
