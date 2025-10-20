@@ -7,7 +7,7 @@ from einops import einsum, rearrange
 import math
 
 import os
-#os.environ["TRITON_INTERPRET"] = "1"
+# os.environ["TRITON_INTERPRET"] = "1"
 
 import triton
 import triton.language as tl
@@ -73,9 +73,14 @@ class FlashAttentionFuncPytorch(autograd.Function):
         Q_tile_size, d = Q.shape
         N, _ = K.shape
         K_tiles = ceiling_division(N, K_tile_size)
-        m = torch.full((Q_tile_size, ), float("-inf"), dtype=torch.float32, device=Q.device)
+        m = torch.full(
+            (Q_tile_size,),
+            float("-inf"),
+            dtype=torch.float32, device=Q.device)
         l = torch.zeros((Q_tile_size, ), dtype=torch.float32, device=Q.device)
-        O_curr = torch.zeros((Q_tile_size, d), dtype=torch.float32, device=Q.device)
+        O_curr = torch.zeros(
+            (Q_tile_size, d),
+            dtype=torch.float32, device=Q.device)
         for j in range(K_tiles):
             K_j = K[j*K_tile_size:(j+1)*K_tile_size]
             V_j = V[j*K_tile_size:(j+1)*K_tile_size]
@@ -109,6 +114,7 @@ def flash_fwd_kernel(
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr,
 ):
     # Program indices
     query_tile_index = tl.program_id(0)
@@ -146,10 +152,17 @@ def flash_fwd_kernel(
     O_curr = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
 
     Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-    for _ in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+    if is_causal:
+        row_idxs = tl.arange(query_tile_index*Q_TILE_SIZE,
+                            (query_tile_index+1)*Q_TILE_SIZE)[:]
+    for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         S = tl.dot(Q, K_j.trans(1, 0), out_dtype=tl.float32) / scale
+        if is_causal:
+            col_idxs = tl.arange(j*K_TILE_SIZE, (j+1)*K_TILE_SIZE)
+            mask = row_idxs[:, None] > col_idxs
+            S = tl.where(mask, S, float("-inf"))
         next_m = tl.maximum(m, tl.max(S, axis=-1))
 
         P = tl.exp(S - next_m[:, None])
@@ -209,7 +222,6 @@ class FlashAttentionFunc(autograd.Function):
         ctx.Q_TILE_SIZE = 32
         ctx.K_TILE_SIZE = 32
 
-
         assert Q.shape == K.shape
         assert V.shape == Q.shape
         assert Q.is_cuda and K.is_cuda and V.is_cuda
@@ -219,7 +231,7 @@ class FlashAttentionFunc(autograd.Function):
         Q = rearrange(Q, "... seq_len d -> (...) seq_len d")
         K = rearrange(K, "... seq_len d -> (...) seq_len d")
         V = rearrange(V, "... seq_len d -> (...) seq_len d")
-        
+
         batch_size, N, d = Q.shape
 
         O = torch.empty(batch_size, N, d, dtype=Q.dtype, device=Q.device)
@@ -237,9 +249,11 @@ class FlashAttentionFunc(autograd.Function):
             scale=math.sqrt(d),
             D=d,
             Q_TILE_SIZE=ctx.Q_TILE_SIZE,
-            K_TILE_SIZE=ctx.K_TILE_SIZE)
+            K_TILE_SIZE=ctx.K_TILE_SIZE,
+            is_causal=is_causal)
 
         ctx.save_for_backward(L)
+        ctx.is_causal = is_causal
         O = O.reshape(input_shape)
         return O
 
