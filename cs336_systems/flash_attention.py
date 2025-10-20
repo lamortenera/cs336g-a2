@@ -111,8 +111,6 @@ def flash_fwd_kernel(
     query_tile_index = tl.program_id(0)
     batch_index = tl.program_id(1)
 
-    # Offset each pointer with the corresponding batch index
-    # multiplied with the batch stride for each tensor
     Q_block_ptr = tl.make_block_ptr(
         Q_ptr + batch_index * stride_qb,
         shape=(N_QUERIES, D),
