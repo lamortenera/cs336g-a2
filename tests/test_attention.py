@@ -55,9 +55,34 @@ def _test_flash_forward_pass(impl, device="cpu", is_causal=False):
 
     print("o_ref",o_ref[:4,:4,:4])
     print("o",o[:4,:4,:4])
+    print("l_ref", l_ref[:4,:4])
+    print("l", l[:4,:4])
 
     torch.testing.assert_close(o, o_ref, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(l, l_ref, rtol=1e-2, atol=1e-2)
+
+def test_flash_forward_pytl():
+    device = "cuda"
+    is_causal = False
+    q, k, v, _do = _make_attn_inputs(device)
+    o_py = get_flashattention_autograd_function_pytorch().apply(q, k, v, is_causal)
+    o_tl = get_flashattention_autograd_function_triton().apply(q, k, v, is_causal) 
+
+    def get_l(o):
+        # Extract L from the saved tensors
+        assert o.grad_fn.saved_tensors is not None, "No saved tensors found in the output tensor. Make sure your autograd forward is saving them using ctx.save_for_backward."
+        maybe_ls = [t for t in o.grad_fn.saved_tensors if t.shape == (q.shape[0], q.shape[1])]
+
+        assert len(maybe_ls) == 1, f"Expected one tensor of shape {q.shape[0], q.shape[1]} in saved tensors, but found {len(maybe_ls)}. The tests require you to save exactly one tensor of this shape, corresponding to the log-sum-exp of the attention scores."
+        return maybe_ls[0]
+
+    l_py = get_l(o_py)
+    l_tl = get_l(o_tl)
+
+
+    torch.testing.assert_close(o_py, o_tl, rtol=1e-2, atol=1e-2)
+    torch.testing.assert_close(l_py, l_tl, rtol=1e-2, atol=1e-2)
+
 
 
 def test_flash_forward_pass_pytorch():

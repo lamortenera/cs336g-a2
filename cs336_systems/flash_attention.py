@@ -22,7 +22,7 @@ class FlashAttentionFuncPytorch(autograd.Function):
     def forward(ctx, Q: Float[Tensor, "... seq_len d"],
                 K: Float[Tensor, "... seq_len d"],
                 V: Float[Tensor, "... seq_len d"],
-                is_causal: bool = False, Q_tile_size: int = 16, K_tile_size: int = 32) -> Float[Tensor,
+                is_causal: bool = False, Q_tile_size: int = 32, K_tile_size: int = 32) -> Float[Tensor,
                                                                                                 "... seq_len d"]:
         # d <= 64 based on assignment description
         # 4(b**2 + 4*b*d + 2b) <= (L1 cache size)
@@ -46,8 +46,8 @@ class FlashAttentionFuncPytorch(autograd.Function):
         # Q_tile_size = N
         # K_tile_size = N
 
-        O = torch.empty(batch_size, N, d, dtype=Q.dtype)
-        L = torch.empty(batch_size, N, dtype=torch.float32)
+        O = torch.empty(batch_size, N, d, dtype=Q.dtype, device=Q.device)
+        L = torch.empty(batch_size, N, dtype=torch.float32, device=Q.device)
 
         # Do work
         Q_tiles = ceiling_division(N, Q_tile_size)
@@ -73,9 +73,9 @@ class FlashAttentionFuncPytorch(autograd.Function):
         Q_tile_size, d = Q.shape
         N, _ = K.shape
         K_tiles = ceiling_division(N, K_tile_size)
-        m = torch.full((Q_tile_size, ), float("-inf"), dtype=torch.float32)
-        l = torch.zeros((Q_tile_size, ), dtype=torch.float32)
-        O_curr = torch.zeros((Q_tile_size, ), d, dtype=torch.float32)
+        m = torch.full((Q_tile_size, ), float("-inf"), dtype=torch.float32, device=Q.device)
+        l = torch.zeros((Q_tile_size, ), dtype=torch.float32, device=Q.device)
+        O_curr = torch.zeros((Q_tile_size, d), dtype=torch.float32, device=Q.device)
         for j in range(K_tiles):
             K_j = K[j*K_tile_size:(j+1)*K_tile_size]
             V_j = V[j*K_tile_size:(j+1)*K_tile_size]
@@ -162,16 +162,12 @@ def flash_fwd_kernel(
         m = next_m
         O_curr *= correction[:, None]
 
-        #tl.device_print("p: ", P)
-        #tl.device_print("v_j:", V_j)
-        #tl.device_print("Matmul: ", tl.dot(P.to(V_j.dtype), V_j))
         O_curr += tl.dot(P.to(V_j.dtype), V_j)
 
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
 
     O_curr /= l[:, None]
-    #tl.device_print("O_curr", O_curr)
 
     O_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
@@ -222,7 +218,7 @@ class FlashAttentionFunc(autograd.Function):
         input_shape = Q.shape
         Q = rearrange(Q, "... seq_len d -> (...) seq_len d")
         K = rearrange(K, "... seq_len d -> (...) seq_len d")
-        K = rearrange(V, "... seq_len d -> (...) seq_len d")
+        V = rearrange(V, "... seq_len d -> (...) seq_len d")
         
         batch_size, N, d = Q.shape
 
