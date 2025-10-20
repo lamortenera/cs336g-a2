@@ -153,15 +153,15 @@ def flash_fwd_kernel(
 
     Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
     if is_causal:
-        row_idxs = tl.arange(query_tile_index*Q_TILE_SIZE,
-                            (query_tile_index+1)*Q_TILE_SIZE)[:]
+        row_idxs = (tl.arange(0, Q_TILE_SIZE) + Q_TILE_SIZE*query_tile_index)[:, None]
+        col_idxs = tl.arange(0, K_TILE_SIZE) 
+
     for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         S = tl.dot(Q, K_j.trans(1, 0), out_dtype=tl.float32) / scale
         if is_causal:
-            col_idxs = tl.arange(j*K_TILE_SIZE, (j+1)*K_TILE_SIZE)
-            mask = row_idxs[:, None] > col_idxs
+            mask = row_idxs >= col_idxs
             S = tl.where(mask, S, float("-inf"))
         next_m = tl.maximum(m, tl.max(S, axis=-1))
 
@@ -179,6 +179,8 @@ def flash_fwd_kernel(
 
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
+        if is_causal:
+            col_idxs += K_TILE_SIZE
 
     O_curr /= l[:, None]
 
