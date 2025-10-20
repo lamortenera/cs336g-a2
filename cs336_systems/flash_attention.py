@@ -7,7 +7,7 @@ from einops import einsum, rearrange
 import math
 
 import os
-os.environ["TRITON_INTERPRET"] = "1"
+#os.environ["TRITON_INTERPRET"] = "1"
 
 import triton
 import triton.language as tl
@@ -153,7 +153,7 @@ def flash_fwd_kernel(
         next_m = tl.maximum(m, tl.max(S, axis=-1))
 
         P = tl.exp(S - next_m[:, None])
-        l_j = P.sum(axis=-1)
+        l_j = tl.sum(P, axis=-1)
 
         correction = tl.exp(m - next_m)
 
@@ -161,12 +161,17 @@ def flash_fwd_kernel(
         l += l_j
         m = next_m
         O_curr *= correction[:, None]
-        tl.dot(P.to(V_j.dtype), V_j, acc=O_curr)
+
+        #tl.device_print("p: ", P)
+        #tl.device_print("v_j:", V_j)
+        #tl.device_print("Matmul: ", tl.dot(P.to(V_j.dtype), V_j))
+        O_curr += tl.dot(P.to(V_j.dtype), V_j)
 
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
 
     O_curr /= l[:, None]
+    #tl.device_print("O_curr", O_curr)
 
     O_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
@@ -183,10 +188,10 @@ def flash_fwd_kernel(
 
     L_block_ptr = tl.make_block_ptr(
         L_ptr + batch_index * stride_lb,
-        shape=(N_QUERIES),
-        strides=(stride_lq),
-        offsets=(query_tile_index * Q_TILE_SIZE),
-        block_shape=(Q_TILE_SIZE),
+        shape=(N_QUERIES,),
+        strides=(stride_lq,),
+        offsets=(query_tile_index * Q_TILE_SIZE,),
+        block_shape=(Q_TILE_SIZE,),
         order=(0,)
     )
 

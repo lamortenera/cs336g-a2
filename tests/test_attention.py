@@ -53,6 +53,9 @@ def _test_flash_forward_pass(impl, device="cpu", is_causal=False):
 
     o_ref, l_ref = _attention_and_lse(q, k, v, is_causal)
 
+    print("o_ref",o_ref[:4,:4,:4])
+    print("o",o[:4,:4,:4])
+
     torch.testing.assert_close(o, o_ref, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(l, l_ref, rtol=1e-2, atol=1e-2)
 
