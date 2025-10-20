@@ -6,6 +6,9 @@ import torch
 from einops import einsum, rearrange
 import math
 
+import os
+os.environ["TRITON_INTERPRET"] = "1"
+
 import triton
 import triton.language as tl
 
@@ -71,8 +74,8 @@ class FlashAttentionFuncPytorch(autograd.Function):
         N, _ = K.shape
         K_tiles = ceiling_division(N, K_tile_size)
         m = torch.full((Q_tile_size, ), float("-inf"), dtype=torch.float32)
-        l = torch.zeros(Q_tile_size, dtype=torch.float32)
-        O_curr = torch.zeros(Q_tile_size, d, dtype=torch.float32)
+        l = torch.zeros((Q_tile_size, ), dtype=torch.float32)
+        O_curr = torch.zeros((Q_tile_size, ), d, dtype=torch.float32)
         for j in range(K_tiles):
             K_j = K[j*K_tile_size:(j+1)*K_tile_size]
             V_j = V[j*K_tile_size:(j+1)*K_tile_size]
@@ -138,25 +141,25 @@ def flash_fwd_kernel(
         order=(1, 0),
     )
 
-    m = tl.full((Q_TILE_SIZE, ), float("-inf"), dtype=torch.float32)
-    l = tl.zeros(Q_TILE_SIZE, dtype=torch.float32)
-    O_curr = tl.zeros(Q_TILE_SIZE, D, dtype=torch.float32)
+    m = tl.full((Q_TILE_SIZE, ), float("-inf"), dtype=tl.float32)
+    l = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
+    O_curr = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
 
     Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
     for _ in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
         K_j = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_j = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
-        S = tl.dot(Q, K_j.T, out_dtype=tl.float32) / scale
+        S = tl.dot(Q, K_j.trans(1, 0), out_dtype=tl.float32) / scale
         next_m = tl.maximum(m, tl.max(S, axis=-1))
 
         P = tl.exp(S - next_m[:, None])
-        l_j = P.sum(axis=-1, dtype=tl.float32)
+        l_j = P.sum(axis=-1)
 
         correction = tl.exp(m - next_m)
 
         l *= correction
         l += l_j
-        m[...] = next_m
+        m = next_m
         O_curr *= correction[:, None]
         tl.dot(P.to(V_j.dtype), V_j, acc=O_curr)
 
@@ -187,7 +190,7 @@ def flash_fwd_kernel(
         order=(0,)
     )
 
-    tl.store(L_block_ptr, m + torch.log(l), boundary_check=(0,))
+    tl.store(L_block_ptr, m + tl.log(l), boundary_check=(0,))
 
 
 class FlashAttentionFunc(autograd.Function):
@@ -221,7 +224,7 @@ class FlashAttentionFunc(autograd.Function):
         O = torch.empty(batch_size, N, d, dtype=Q.dtype, device=Q.device)
         L = torch.empty(batch_size, N, dtype=torch.float32, device=Q.device)
 
-        Q_tiles = tl.cdiv(N, ctx.Q_TILE_SIZE)
+        Q_tiles = ceiling_division(N, ctx.Q_TILE_SIZE)
         flash_fwd_kernel[(Q_tiles, batch_size)](
             Q, K, V, O, L,
             Q.stride(0), Q.stride(1), Q.stride(2),
@@ -231,6 +234,7 @@ class FlashAttentionFunc(autograd.Function):
             L.stride(0), L.stride(1),
             N_QUERIES=N, N_KEYS=N,
             scale=math.sqrt(d),
+            D=d,
             Q_TILE_SIZE=ctx.Q_TILE_SIZE,
             K_TILE_SIZE=ctx.K_TILE_SIZE)
 
