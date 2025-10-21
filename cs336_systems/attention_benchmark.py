@@ -5,6 +5,7 @@ import torch
 import timeit
 import math
 import pandas as pd
+import flash_attention
 from torch import Tensor
 from einops import rearrange, einsum
 from jaxtyping import Float, Bool, Int
@@ -22,7 +23,7 @@ def scaled_dot_product_attention(
     Q: Float[Tensor, " ... queries d_k"],
     K: Float[Tensor, " ... keys    d_k"],
     V: Float[Tensor, " ... keys    d_v"],
-    mask: Bool[Tensor, " ... queries keys"] | None = None,
+    is_causal: bool = False,
 ) -> Float[Tensor, " ... queries d_v"]:
     """Scaled dot-product attention.
 
@@ -47,8 +48,11 @@ def scaled_dot_product_attention(
         attention_scores = einsum(
             Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
 
-    if mask is not None:
-        attention_scores = torch.where(mask, attention_scores, float("-inf"))
+    if is_causal:
+        row_idxs = torch.arange(Q.shape[-2], device=Q.device)
+        col_idxs = torch.arange(K.shape[-2], device=K.device)
+        attention_scores = torch.where(
+            row_idxs[:, None] >= col_idxs, attention_scores, float("-inf"))
 
     with nvtx.range("computing softmax"):
         # Softmax over the key dimension
@@ -74,7 +78,7 @@ def inner_loop(Q, K, V, device_index):
     get_mem(device_index)
     m_start = get_mem(device_index)
     with nvtx.range("Forward"):
-        O = scaled_dot_product_attention(Q, K, V)
+        O = scaled_dot_product_attention(Q, K, V, True)
         loss = O.sum()
         torch.cuda.synchronize()
     t_fend = timeit.default_timer()
@@ -102,14 +106,21 @@ def to_series(df):
     return stacked[0]
 
 
-def benchmark(args):
+def get_dtype(s: str) -> torch.dtype:
+    dtype = getattr(torch, s)
+    assert isinstance(dtype, torch.dtype)
+    assert dtype.is_floating_point
+    return dtype
 
+
+def benchmark(args):
+    dtype = get_dtype(args.dtype)
     Q = torch.randn(args.batch_size, args.context_length,
-                    args.d_model).to("cuda").requires_grad_()
+                    args.d_model, dtype=dtype).to("cuda").requires_grad_()
     K = torch.randn(args.batch_size, args.context_length,
-                    args.d_model).to("cuda").requires_grad_()
+                    args.d_model, dtype=dtype).to("cuda").requires_grad_()
     V = torch.randn(args.batch_size, args.context_length,
-                    args.d_model).to("cuda").requires_grad_()
+                    args.d_model, dtype=dtype).to("cuda").requires_grad_()
 
     device_index = None
     if parse_bool(args.memory_profile):
@@ -117,7 +128,6 @@ def benchmark(args):
 
     get_mem(device_index)
     m_0 = get_mem(device_index)
-
 
     with nvtx.range("Warmup steps"):
         for _ in range(args.warmup_steps):
@@ -155,6 +165,10 @@ if __name__ == "__main__":
         "--compile", help="If true, compile the computation", type=str,
         default="False")
     parser.add_argument(
+        "--use_triton",
+        help="If true, use the triton implementation (compiled)", type=str,
+        default="False")
+    parser.add_argument(
         "--memory_output",
         help="If present, materialized detailed mem stats here")
     parser.add_argument("--output", help="Path to json output", type=str)
@@ -163,12 +177,15 @@ if __name__ == "__main__":
                         help="Context length", type=int, nargs="+")
     parser.add_argument(
         "--d_model", help="Model embedding size", type=int, nargs="+")
+    parser.add_argument("--dtype", help="The dtype to use", default="float32")
     args = parser.parse_args()
 
+    if parse_bool(args.use_triton):
+        scaled_dot_product_attention = flash_attention.FlashAttentionFunc.apply
     if parse_bool(args.compile):
         scaled_dot_product_attention = torch.compile(
             scaled_dot_product_attention)
-
+    
     if args.memory_output:
         torch.cuda.memory._record_memory_history(max_entries=1000000)
 
@@ -187,6 +204,7 @@ if __name__ == "__main__":
                 all_stats.append(stats_dict)
             except Exception as e:
                 print(f"Failed loop for {label} with error:\n{e}")
+                raise e
     all_stats = pd.DataFrame(all_stats)
 
     if args.memory_output:

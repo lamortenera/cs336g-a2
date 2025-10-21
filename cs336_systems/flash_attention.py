@@ -104,7 +104,7 @@ class FlashAttentionFuncPytorch(autograd.Function):
 
             l[...] = l * correction + l_j
             m[...] = next_m
-            O_curr[...] = O_curr * correction[:, None] + P @ V_j
+            O_curr[...] = O_curr * correction[:, None] + P.to(V_j.dtype) @ V_j
             if is_causal:
                 col_idxs += K_tile_size
 
@@ -130,9 +130,10 @@ class FlashAttentionFuncPytorch(autograd.Function):
         P = torch.exp(S - L[..., None])
         dP = einsum(
             dO, V, "... n_queries d, ... n_keys d -> ... n_queries n_keys")
-        dS = P * (dP - D[..., None])
+        dS = (P * (dP - D[..., None])).to(Q.dtype)
         dV = einsum(
-            P, dO, "... n_queries n_keys, ... n_queries d -> ... n_keys d")
+            P.to(dO.dtype),
+            dO, "... n_queries n_keys, ... n_queries d -> ... n_keys d")
         dQ = einsum(
             dS, K, "... n_queries n_keys, ... n_keys d -> ... n_queries d"
         )/scale
@@ -320,16 +321,17 @@ else:
         @staticmethod
         @torch.compile
         def backward(ctx, dO: Float[Tensor, "... n_queries d"]) -> tuple[
-            Float[Tensor, "... n_queries d"],
-            Float[Tensor, "... n_keys d"],
-            Float[Tensor, "... n_keys d"]]:
+                Float[Tensor, "... n_queries d"],
+                Float[Tensor, "... n_keys d"],
+                Float[Tensor, "... n_keys d"]]:
             Q, K, V, L, O = ctx.saved_tensors
             D = torch.sum(O * dO, axis=-1)
             n_queries, d = Q.shape[-2:]
             scale = math.sqrt(d)
             S = (
                 einsum(
-                    Q, K, "... n_queries d, ... n_keys d -> ... n_queries n_keys") /
+                    Q, K,
+                    "... n_queries d, ... n_keys d -> ... n_queries n_keys") /
                 scale)
             if ctx.is_causal:
                 idxs = torch.arange(n_queries, device=S.device)
