@@ -203,9 +203,7 @@ else:
 
         Q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
         if is_causal:
-            row_idxs = (tl.arange(Q_TILE_SIZE *
-                        query_tile_index, Q_TILE_SIZE *
-                        (query_tile_index + 1)))[:, None]
+            row_idxs = (tl.arange(0, Q_TILE_SIZE) + Q_TILE_SIZE*query_tile_index)[:, None]
             col_idxs = tl.arange(0, K_TILE_SIZE)
 
         for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
