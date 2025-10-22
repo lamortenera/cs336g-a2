@@ -297,17 +297,18 @@ else:
             order=(1, 0),
         )
 
-        #dQ_block_ptr = tl.make_block_ptr(
+        # dQ_block_ptr = tl.make_block_ptr(
         #    dQ_ptr + batch_index * stride_dqb,
         #    shape=(N_QUERIES, D),
         #    strides=(stride_dqq, stride_dqd),
         #    offsets=(0, 0),
         #    block_shape=(Q_TILE_SIZE, D),
         #    order=(1, 0),
-        #)
-        #atomic add seems incompatible with block_ptr,
-        #using a tensor of pointers instead
-        dQ_ptrs = dQ_ptr + batch_index * stride_dqb + tl.arange(0,Q_TILE_SIZE)[:,None]*stride_dqq + tl.arange(0,D)*stride_dqd
+        # )
+        # atomic add seems incompatible with block_ptr,
+        # using a tensor of pointers instead
+        dQ_ptrs = (dQ_ptr + batch_index * stride_dqb + tl.arange(
+            0, Q_TILE_SIZE)[:, None]*stride_dqq + tl.arange(0, D)*stride_dqd)
 
         dO_block_ptr = tl.make_block_ptr(
             dO_ptr + batch_index * stride_dob,
@@ -357,7 +358,6 @@ else:
         dK_curr = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
         dV_curr = tl.zeros((K_TILE_SIZE, D), dtype=tl.float32)
         K = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
-        #K_trans = K.trans(0, 1)
         V_trans = tl.load(
             V_block_ptr, boundary_check=(0, 1),
             padding_option="zero").trans(
@@ -382,7 +382,7 @@ else:
                 padding_option="zero")
 
             S_i = tl.dot(Q_i, K.T, out_dtype=tl.float32) / scale
-            
+
             if is_causal:
                 mask = row_idxs[:, None] >= col_idxs
                 S_i = tl.where(mask, S_i, float("-inf"))
@@ -399,7 +399,7 @@ else:
             tl.atomic_add(dQ_ptrs, dQ_i)
 
             Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
-            #dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
+            # dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
             dQ_ptrs += Q_TILE_SIZE*stride_dqq
             dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
             L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
