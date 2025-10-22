@@ -297,14 +297,6 @@ else:
             order=(1, 0),
         )
 
-        # dQ_block_ptr = tl.make_block_ptr(
-        #    dQ_ptr + batch_index * stride_dqb,
-        #    shape=(N_QUERIES, D),
-        #    strides=(stride_dqq, stride_dqd),
-        #    offsets=(0, 0),
-        #    block_shape=(Q_TILE_SIZE, D),
-        #    order=(1, 0),
-        # )
         # atomic add seems incompatible with block_ptr,
         # using a tensor of pointers instead
         dQ_ptrs = (dQ_ptr + batch_index * stride_dqb + tl.arange(
@@ -388,18 +380,17 @@ else:
                 S_i = tl.where(mask, S_i, float("-inf"))
 
             P_i = tl.exp(S_i - L_i[:, None])
-
-            dP_i = tl.dot(dO_i, V_trans)
-            dS_i = (P_i * (dP_i - D_i[:, None])).to(Q_i.dtype)
             dV_curr += tl.dot(P_i.to(dO_i.dtype).trans(1, 0),
                               dO_i).to(dV_curr.dtype)
-            dK_curr += tl.dot(dS_i.trans(1, 0), Q_i).to(dK_curr.dtype)/scale
 
-            dQ_i = tl.dot(dS_i, K)/scale
+            dP_i = tl.dot(dO_i, V_trans)
+            dS_i = (P_i * (dP_i - D_i[:, None])).to(Q_i.dtype)/scale
+            dK_curr += tl.dot(dS_i.trans(1, 0), Q_i).to(dK_curr.dtype)
+
+            dQ_i = tl.dot(dS_i, K)
             tl.atomic_add(dQ_ptrs, dQ_i)
 
             Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
-            # dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
             dQ_ptrs += Q_TILE_SIZE*stride_dqq
             dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
             L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
@@ -408,7 +399,7 @@ else:
                 row_idxs += Q_TILE_SIZE
 
         dK_block_ptr = tl.make_block_ptr(
-            K_ptr + batch_index * stride_dkb,
+            dK_ptr + batch_index * stride_dkb,
             shape=(N_KEYS, D),
             strides=(stride_dkk, stride_dkd),
             offsets=(key_tile_index * K_TILE_SIZE, 0),
