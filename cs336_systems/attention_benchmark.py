@@ -204,6 +204,7 @@ if __name__ == "__main__":
                 all_stats.append(stats_dict)
             except Exception as e:
                 print(f"Failed loop for {label} with error:\n{e}")
+                raise e
     all_stats = pd.DataFrame(all_stats)
 
     if args.memory_output:

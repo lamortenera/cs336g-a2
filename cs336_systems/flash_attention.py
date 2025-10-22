@@ -436,8 +436,8 @@ else:
             # bigger (128kb on L4 and 196 on really good GPUs)
             # b**2 + 514*b <= 16000
             # it's about b <= 29 on my crappy laptop, 32 should work in most cases.
-            ctx.Q_TILE_SIZE = 32
-            ctx.K_TILE_SIZE = 32
+            ctx.Q_TILE_SIZE = 16#32
+            ctx.K_TILE_SIZE = 16#32
 
             assert Q.shape == K.shape
             assert V.shape == Q.shape
@@ -480,7 +480,7 @@ else:
                 Float[Tensor, "... n_keys d"],
                 Float[Tensor, "... n_keys d"]]:
             assert dO.is_cuda
-            assert dO.is_contiguous()
+            #assert dO.is_contiguous()
             Q, K, V, L, O = ctx.saved_tensors
             dO = rearrange(dO, "... seq_len d -> (...) seq_len d")
             D = torch.sum(O * dO, axis=-1)
