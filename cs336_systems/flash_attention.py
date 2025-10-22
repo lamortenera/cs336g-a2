@@ -384,7 +384,7 @@ else:
                               dO_i).to(dV_curr.dtype)
 
             dP_i = tl.dot(dO_i, V_trans)
-            dS_i = (P_i * (dP_i - D_i[:, None])).to(Q_i.dtype)/scale
+            dS_i = ((P_i * (dP_i - D_i[:, None]))/scale).to(Q_i.dtype)
             dK_curr += tl.dot(dS_i.trans(1, 0), Q_i).to(dK_curr.dtype)
 
             dQ_i = tl.dot(dS_i, K)
