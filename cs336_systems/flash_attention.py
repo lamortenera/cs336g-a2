@@ -297,14 +297,17 @@ else:
             order=(1, 0),
         )
 
-        dQ_block_ptr = tl.make_block_ptr(
-            dQ_ptr + batch_index * stride_dqb,
-            shape=(N_QUERIES, D),
-            strides=(stride_dqq, stride_dqd),
-            offsets=(0, 0),
-            block_shape=(Q_TILE_SIZE, D),
-            order=(1, 0),
-        )
+        #dQ_block_ptr = tl.make_block_ptr(
+        #    dQ_ptr + batch_index * stride_dqb,
+        #    shape=(N_QUERIES, D),
+        #    strides=(stride_dqq, stride_dqd),
+        #    offsets=(0, 0),
+        #    block_shape=(Q_TILE_SIZE, D),
+        #    order=(1, 0),
+        #)
+        #atomic add seems incompatible with block_ptr,
+        #using a tensor of pointers instead
+        dQ_ptrs = dQ_ptr + batch_index * stride_dqb + tl.arange(0,Q_TILE_SIZE)[:,None]*stride_dqq + tl.arange(0,D)*stride_dqd
 
         dO_block_ptr = tl.make_block_ptr(
             dO_ptr + batch_index * stride_dob,
@@ -318,19 +321,19 @@ else:
         D_block_ptr = tl.make_block_ptr(
             D_ptr + batch_index * stride_db,
             shape=(N_QUERIES, ),
-            strides=(stride_db, stride_dq),
+            strides=(stride_dq,),
             offsets=(0,),
             block_shape=(Q_TILE_SIZE, ),
-            order=(0),
+            order=(0,),
         )
 
         L_block_ptr = tl.make_block_ptr(
             L_ptr + batch_index * stride_lb,
             shape=(N_QUERIES, ),
-            strides=(stride_lb, stride_lq),
+            strides=(stride_lq,),
             offsets=(0,),
             block_shape=(Q_TILE_SIZE, ),
-            order=(0),
+            order=(0,),
         )
 
         K_block_ptr = tl.make_block_ptr(
@@ -358,7 +361,7 @@ else:
         V_trans = tl.load(
             V_block_ptr, boundary_check=(0, 1),
             padding_option="zero").trans(
-            0, 1)
+            1, 0)
 
         if is_causal:
             row_idxs = tl.arange(0, Q_TILE_SIZE)
@@ -388,15 +391,16 @@ else:
 
             dP_i = tl.dot(dO_i, V_trans)
             dS_i = (P_i * (dP_i - D_i[:, None])).to(Q_i.dtype)
-            dV_curr += tl.dot(P_i.to(dO_i.dtype).trans(0, 1),
+            dV_curr += tl.dot(P_i.to(dO_i.dtype).trans(1, 0),
                               dO_i).to(dV_curr.dtype)
-            dK_curr += tl.dot(dS_i.trans(0, 1), Q_i).to(dK_curr.dtype)/scale
+            dK_curr += tl.dot(dS_i.trans(1, 0), Q_i).to(dK_curr.dtype)/scale
 
             dQ_i = tl.dot(dS_i, K)/scale
-            tl.atomic_add(dQ_block_ptr, dQ_i)
+            tl.atomic_add(dQ_ptrs, dQ_i)
 
             Q_block_ptr = Q_block_ptr.advance((Q_TILE_SIZE, 0))
-            dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
+            #dQ_block_ptr = dQ_block_ptr.advance((Q_TILE_SIZE, 0))
+            dQ_ptrs += Q_TILE_SIZE*stride_dqq
             dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE, 0))
             L_block_ptr = L_block_ptr.advance((Q_TILE_SIZE,))
             D_block_ptr = D_block_ptr.advance((Q_TILE_SIZE,))
@@ -499,11 +503,10 @@ else:
 
             K_tiles = ceiling_division(N, ctx.K_TILE_SIZE)
             flash_bwd_kernel[(K_tiles, batch_size)](
-                Q, K, V, O, L, D, dO, dQ, dK, dV
+                Q, K, V, L, D, dO, dQ, dK, dV,
                 Q.stride(0), Q.stride(1), Q.stride(2),
                 K.stride(0), K.stride(1), K.stride(2),
                 V.stride(0), V.stride(1), V.stride(2),
-                O.stride(0), O.stride(1), O.stride(2),
                 L.stride(0), L.stride(1),
                 D.stride(0), D.stride(1),
                 dO.stride(0), dO.stride(1), dO.stride(2),
@@ -515,7 +518,7 @@ else:
                 D=d,
                 Q_TILE_SIZE=ctx.Q_TILE_SIZE,
                 K_TILE_SIZE=ctx.K_TILE_SIZE,
-                is_causal=is_causal)
+                is_causal=ctx.is_causal)
 
             return (dQ.reshape(ctx.input_shape).to(Q.dtype),
                     dK.reshape(ctx.input_shape),
