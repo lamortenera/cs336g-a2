@@ -24,6 +24,8 @@ from jaxtyping import Float
 
 from cs336_systems import flash_attention
 from cs336_systems import utils
+import torch.cuda.nvtx as nvtx
+
 
 
 def get_tensors(
@@ -144,9 +146,11 @@ def main(argv: Sequence[str]) -> None:
     flash = torch.compile(flash_attention.FlashAttentionFunc.apply)
 
     def flash_fwd_bwd() -> None:
-        o = flash(q, k, v, True)
-        loss = o.sum()
-        _ = loss.backward()
+        with nvtx.range("forward"):
+            o = flash(q, k, v, True)
+            loss = o.sum()
+        with nvtx.range("backward"):
+            _ = loss.backward()
 
     logging.info("Running benchmark...")
     avg_ms = triton.testing.do_bench(
